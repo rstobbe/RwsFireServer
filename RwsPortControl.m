@@ -6,6 +6,7 @@
 classdef RwsPortControl < handle
     
     properties (SetAccess = private) 
+        port;
         ReconType;
         MetaData;
         DataHeader;
@@ -16,7 +17,14 @@ classdef RwsPortControl < handle
         TotalLength;
         AcqsPerPortRead;
         TotalAcqs;
+        DummyAcqs;
+        SampStart;
+        SampEnd;
+        NumCol;
+        RxChannels;
+        TrajDims;
         TotalPortReads;
+        TotalBlockReads;
         ExpectedBytes;
         BufferReadNumber = 0;
         BaseSocket;
@@ -24,7 +32,6 @@ classdef RwsPortControl < handle
         SocketInputStream;
         SocketDataInputStream;
         SocketOutputStream;
-        PortDataSizeApprox = 20e6;
         PortDataSize;
         PortData;
         PortWait = 0;
@@ -32,7 +39,12 @@ classdef RwsPortControl < handle
         MaxPortWaitAcq = 0;
         PortReadTime = 0;
         MaxPortReadTime = 0;
-        port;
+        DataBlockAcqStartNumber;
+        DataBlockAcqStopNumber;
+        DataAcqNumber;
+        DataBlockNumber;
+        DataBlockLength;
+        Data;
     end
     methods
 
@@ -51,7 +63,8 @@ classdef RwsPortControl < handle
 % ConnectClient
 %==================================================================          
         function ConnectClient(obj,log)
-            javaaddpath('D:\0 Development');
+            Path = fileparts(mfilename('fullpath'));
+            javaaddpath(Path);
             import java.net.ServerSocket
             import java.io.*
             OpenSocket = obj.BaseSocket.accept;
@@ -112,25 +125,36 @@ classdef RwsPortControl < handle
             obj.DataHeader = ismrmrd.AcquisitionHeader(HeaderBytes);
 
             %--------------------------------------------
-            % Initialize 'PortData'
+            % Initialize PortData Info
             %--------------------------------------------            
+            obj.RxChannels = obj.DataHeader.active_channels;
+            obj.TrajDims = obj.DataHeader.trajectory_dimensions;
             obj.IdentifierLength = constants.SIZEOF_MRD_MESSAGE_IDENTIFIER;
             obj.HeaderLength = constants.SIZEOF_MRD_ACQUISITION_HEADER;
             obj.TrajLength = double(obj.DataHeader.number_of_samples) * double(obj.DataHeader.trajectory_dimensions) * 4;
             obj.DataLength = double(obj.DataHeader.number_of_samples) * double(obj.DataHeader.active_channels) * 8;
             obj.TotalLength = obj.HeaderLength + obj.TrajLength + obj.DataLength + obj.IdentifierLength;
-            obj.AcqsPerPortRead = floor(obj.PortDataSizeApprox / obj.TotalLength);
-            obj.PortDataSize = obj.AcqsPerPortRead * obj.TotalLength;
-            obj.PortData = zeros(obj.PortDataSize,1);   
         end
         
 %==================================================================
-% SetTotalPortReads
+% InitRwsPortControl
 %==================================================================   
-        function SetTotalPortReads(obj,NumAcqs,log)
-            obj.TotalAcqs = NumAcqs;
-            obj.ExpectedBytes = NumAcqs*obj.TotalLength - (obj.IdentifierLength+obj.HeaderLength);
-            obj.TotalPortReads = ceil(NumAcqs/obj.AcqsPerPortRead);
+        function InitRwsPortControl(obj,PortUpdate,log)
+            obj.AcqsPerPortRead = PortUpdate.AcqsPerPortRead;
+            obj.TotalAcqs = PortUpdate.TotalAcqs;
+            obj.DummyAcqs = PortUpdate.DummyAcqs;
+            obj.SampStart = PortUpdate.SampStart;
+            obj.SampEnd = PortUpdate.SampEnd;
+            obj.NumCol = PortUpdate.NumCol;
+            obj.PortDataSize = obj.AcqsPerPortRead * obj.TotalLength;
+            obj.PortData = zeros(obj.PortDataSize,1);   
+            obj.ExpectedBytes = obj.TotalAcqs*obj.TotalLength - (obj.IdentifierLength+obj.HeaderLength);
+            obj.TotalPortReads = ceil(obj.TotalAcqs/obj.AcqsPerPortRead);
+            obj.TotalBlockReads = obj.TotalPortReads;
+            obj.DataBlockNumber = 0;
+            obj.DataAcqNumber = 1;
+            obj.DataBlockLength = obj.AcqsPerPortRead; 
+            obj.Data = zeros(obj.NumCol*2,obj.AcqsPerPortRead,obj.RxChannels,'single');
         end
         
 %==================================================================
@@ -158,6 +182,56 @@ classdef RwsPortControl < handle
             end
             if obj.ExpectedBytes < obj.PortDataSize*(obj.BufferReadNumber + 1)
                 obj.PortDataSize = obj.ExpectedBytes - (obj.PortDataSize*obj.BufferReadNumber);
+            end
+        end
+
+%==================================================================
+% CreateDataObject
+%==================================================================          
+        function CreateDataObject(obj,log)
+            Ptr = 1;
+            obj.DataBlockNumber = obj.DataBlockNumber + 1;
+            obj.DataBlockAcqStartNumber = (obj.DataBlockNumber-1)*obj.AcqsPerPortRead + 1;
+            obj.DataBlockAcqStopNumber = obj.DataBlockNumber*obj.AcqsPerPortRead;
+            for n = 1:obj.AcqsPerPortRead
+                DataBytes = obj.PortData(Ptr:(Ptr+obj.DataLength-1));
+                Data0 = typecast(DataBytes,'single'); 
+%                dims = [obj.DataHeader.number_of_samples,obj.DataHeader.active_channels];
+%                DataFull = reshape(Data0(1:2:end) + 1j*Data0(2:2:end), dims);
+                dims = [obj.DataHeader.number_of_samples*2,obj.DataHeader.active_channels];
+                DataFull = reshape(Data0,dims);
+%                figure(999998); 
+%                plot(abs(DataFull(:,1)))
+                DataUsed = DataFull((obj.SampStart-1)*2+1:obj.SampEnd*2,:);
+%                figure(999999); 
+%                plot(abs(DataUsed(:,1)))
+                if obj.DataAcqNumber > obj.DummyAcqs
+                    obj.Data(:,n,:) = DataUsed;
+                end
+                if obj.DataAcqNumber == obj.TotalAcqs
+                    obj.DataBlockAcqStopNumber = obj.TotalAcqs;
+                    %--
+                    %leftover = obj.AcqsPerPortRead - n;
+                    %obj.Data(:,n+1:end,:) = obj.Data(obj.NumCol,leftover,obj.RxChannels);           % do like this for now.
+                    %--
+                    break
+                end
+                Ptr = Ptr + obj.DataLength;
+                if Ptr+1 > length(obj.PortData)
+                    error('Data Parsing Problem');
+                end
+                if Ptr > length(obj.PortData)
+                    break
+                end
+                Id = typecast(obj.PortData(Ptr:(Ptr+obj.IdentifierLength-1)),'uint16');
+                if Id ~= constants.MRD_MESSAGE_ISMRMRD_ACQUISITION
+                    error('Data Parsing Problem');
+                end
+                Ptr = Ptr + obj.IdentifierLength;
+%                 HeaderBytes = obj.PortData(Ptr:(Ptr+obj.HeaderLength-1));
+%                 Header = ismrmrd.AcquisitionHeader(uint8(HeaderBytes));
+                Ptr = Ptr + obj.HeaderLength; 
+                obj.DataAcqNumber = obj.DataAcqNumber + 1;
             end
         end
 

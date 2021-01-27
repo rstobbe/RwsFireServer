@@ -31,11 +31,8 @@ classdef RwsFireServer < RwsPortControl
                 %--------------------------------------------
                 % Initialize Recon
                 %--------------------------------------------
-                if strcmpi(obj.ReconType, 'StitchFire') || strcmpi(obj.ReconType, '''StitchFire''') 
-                    log.info("Starting StitchFire")
-                    Recon = StitchFire(obj,log);
-                    obj.SetTotalPortReads(Recon.StitchMetaData.Nproj);
-                end
+                func = str2func(obj.ReconType);
+                Recon = func(obj,log);
                 
                 %--------------------------------------------
                 % Read Port Data and Process
@@ -48,17 +45,18 @@ classdef RwsFireServer < RwsPortControl
                     else
                         log.info('ReceiveData: %d:%d Acqs / PortWait: %d ms',obj.TotalAcqs,obj.TotalAcqs,round(1000*obj.PortWait(n)));
                     end
-                    Recon.ProcessData(obj,log);
+                    Recon.IntraAcqProcess(obj,log);
                 end
-                log.info('Approximate Data Receive Rate: %d Mbps / Time Per Acq: %d us',round((obj.PortDataSizeApprox/max(obj.PortWait))*8/1e6),round(max(1000000*obj.PortWait)/obj.AcqsPerPortRead));
+                log.info('Approximate Data Receive Rate: %d Mbps / Time Per Acq: %d us',round((obj.PortDataSize/max(obj.PortWait))*8/1e6),round(max(1000000*obj.PortWait)/obj.AcqsPerPortRead));
                 
                 %--------------------------------------------
                 % Finish
                 %--------------------------------------------    
-                Recon.Finish(log);
-                Image = Recon.ReturnImage(log);
+                Recon.PostAcqProcess(obj,log);
+                Image = Recon.ReturnIsmrmImage(log);
                 obj.SendOneImage(Image);
                 obj.PortFinish;
+                Recon.CompassReturnFire(obj,Recon,log);
                 
             catch ME
                 log.error('[%s:%d] %s', ME.stack(1).name, ME.stack(1).line, ME.message);
