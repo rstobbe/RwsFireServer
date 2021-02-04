@@ -9,7 +9,7 @@ classdef RwsPortControl < handle
         port;
         ReconType;
         MetaData;
-        FirstDataHeader;
+        DataHeader;
         IdentifierLength;
         HeaderLength;
         TrajLength;
@@ -50,9 +50,7 @@ classdef RwsPortControl < handle
         DataAcqNumber;
         DataBlockNumber;
         DataBlockLength;
-        DataBlockIds;
-        DataBlockHeaders;
-        DataBlock;
+        Data;
         CartInfo;
     end
     methods
@@ -124,7 +122,7 @@ classdef RwsPortControl < handle
             obj.MetaData = ismrmrd.xml.deserialize(MetaData1);   
             
             %--------------------------------------------
-            % Get FirstDataHeader
+            % Get DataHeader
             %--------------------------------------------
             Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
             if Id ~= constants.MRD_MESSAGE_ISMRMRD_ACQUISITION
@@ -132,32 +130,29 @@ classdef RwsPortControl < handle
             end
             HeaderBytes0 = int8(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_ACQUISITION_HEADER));
             HeaderBytes = typecast(HeaderBytes0,'uint8');
-            obj.FirstDataHeader = ismrmrd.AcquisitionHeader(HeaderBytes);
+            obj.DataHeader = ismrmrd.AcquisitionHeader(HeaderBytes);
            
             %--------------------------------------------
             % Initialize PortData Info
             %--------------------------------------------            
-            obj.RxChannels = obj.FirstDataHeader.active_channels;
-            obj.TrajDims = obj.FirstDataHeader.trajectory_dimensions;
+            obj.RxChannels = obj.DataHeader.active_channels;
+            obj.TrajDims = obj.DataHeader.trajectory_dimensions;
             obj.IdentifierLength = constants.SIZEOF_MRD_MESSAGE_IDENTIFIER;
             obj.HeaderLength = constants.SIZEOF_MRD_ACQUISITION_HEADER;
-            obj.TrajLength = double(obj.FirstDataHeader.number_of_samples) * double(obj.FirstDataHeader.trajectory_dimensions) * 4;
-            obj.DataLength = double(obj.FirstDataHeader.number_of_samples) * double(obj.FirstDataHeader.active_channels) * 8;
+            obj.TrajLength = double(obj.DataHeader.number_of_samples) * double(obj.DataHeader.trajectory_dimensions) * 4;
+            obj.DataLength = double(obj.DataHeader.number_of_samples) * double(obj.DataHeader.active_channels) * 8;
             obj.TotalLength = obj.HeaderLength + obj.TrajLength + obj.DataLength + obj.IdentifierLength;
             
             %--------------------------------------------
             % Other Info
             %--------------------------------------------   
-            obj.NumCol = obj.FirstDataHeader.number_of_samples;
+            obj.NumCol = obj.DataHeader.number_of_samples;
             obj.NumAverages = obj.MetaData.encoding.encodingLimits.average.maximum + 1;
             obj.NumContrasts = obj.MetaData.encoding.encodingLimits.contrast.maximum + 1;
             obj.NumPhases = obj.MetaData.encoding.encodingLimits.phase.maximum + 1;
             obj.NumRepititions = obj.MetaData.encoding.encodingLimits.repetition.maximum + 1;
             obj.NumSets = obj.MetaData.encoding.encodingLimits.set.maximum + 1;
             obj.NumSegments = obj.MetaData.encoding.encodingLimits.segment.maximum + 1;
-            obj.CartInfo.NumSlices = obj.MetaData.encoding.encodingLimits.slice.maximum + 1;
-            obj.CartInfo.NumPe1Steps = obj.MetaData.encoding.encodingLimits.kspace_encoding_step_1.maximum + 1;
-            obj.CartInfo.NumPe2Steps = obj.MetaData.encoding.encodingLimits.kspace_encoding_step_2.maximum + 1;  
         end
         
 %==================================================================
@@ -179,7 +174,7 @@ classdef RwsPortControl < handle
             obj.DataBlockNumber = 0;
             obj.DataAcqNumber = 1;
             obj.DataBlockLength = obj.AcqsPerPortRead; 
-            obj.DataBlock = zeros(obj.NumCol*2,obj.AcqsPerPortRead,obj.RxChannels,'single');
+            obj.Data = zeros(obj.NumCol*2,obj.AcqsPerPortRead,obj.RxChannels,'single');
         end
 
 %==================================================================
@@ -187,14 +182,15 @@ classdef RwsPortControl < handle
 %==================================================================   
         function InitCartPortControl(obj,PortUpdate,log)
             obj.AcqsPerPortRead = PortUpdate.AcqsPerPortRead;
-            if isfield(PortUpdate,'TotalAcqs')
-                obj.TotalAcqs = PortUpdate.TotalAcqs;
-            else
-                obj.TotalAcqs = obj.NumAverages * obj.NumContrasts * obj.NumPhases * obj.NumRepititions * obj.NumSets * obj.NumSegments * obj.CartInfo.NumPe1Steps * obj.CartInfo.NumPe2Steps * obj.CartInfo.NumSlices;
-            end
+            obj.CartInfo.NumSlices = obj.MetaData.encoding.encodingLimits.slice.maximum + 1;
+            obj.CartInfo.NumPe1Steps = obj.MetaData.encoding.encodingLimits.kspace_encoding_step_1.maximum + 1;
+            obj.CartInfo.NumPe2Steps = obj.MetaData.encoding.encodingLimits.kspace_encoding_step_2.maximum + 1;  
+            
+            obj.TotalAcqs = obj.NumContrasts * obj.NumPhases * obj.NumRepititions * obj.NumSets * obj.NumSegments * obj.CartInfo.NumPe1Steps * obj.CartInfo.NumPe2Steps * obj.CartInfo.NumSlices;
             obj.DummyAcqs = 0; 
-            obj.SampStart = obj.FirstDataHeader.discard_pre+1;
-            obj.SampEnd = obj.SampStart-1 + obj.NumCol - obj.FirstDataHeader.discard_pre;
+            obj.SampStart = obj.DataHeader.discard_pre+1;
+            obj.SampEnd = obj.SampStart-1 + obj.NumCol - obj.DataHeader.discard_pre;
+
             obj.PortDataSize = obj.AcqsPerPortRead * obj.TotalLength;
             obj.PortData = zeros(obj.PortDataSize,1);   
             obj.ExpectedBytes = obj.TotalAcqs*obj.TotalLength - (obj.IdentifierLength+obj.HeaderLength);
@@ -203,7 +199,7 @@ classdef RwsPortControl < handle
             obj.DataBlockNumber = 0;
             obj.DataAcqNumber = 1;
             obj.DataBlockLength = obj.AcqsPerPortRead; 
-            obj.DataBlock = zeros(obj.NumCol*2,obj.AcqsPerPortRead,obj.RxChannels,'single');
+            obj.Data = zeros(obj.NumCol*2,obj.AcqsPerPortRead,obj.RxChannels,'single');
         end        
         
 %==================================================================
@@ -245,20 +241,27 @@ classdef RwsPortControl < handle
             obj.DataBlockNumber = obj.DataBlockNumber + 1;
             obj.DataBlockAcqStartNumber = (obj.DataBlockNumber-1)*obj.AcqsPerPortRead + 1;
             obj.DataBlockAcqStopNumber = obj.DataBlockNumber*obj.AcqsPerPortRead;
-            obj.DataBlockIds = zeros(1,obj.AcqsPerPortRead);
-            obj.DataBlockHeaders = cell(1,obj.AcqsPerPortRead);
-            warning('off');                 % for conversion of object to structure...                  
             for n = 1:obj.AcqsPerPortRead
                 DataBytes = obj.PortData(Ptr:(Ptr+obj.DataLength-1));
                 Data0 = typecast(DataBytes,'single'); 
-                dims = [obj.FirstDataHeader.number_of_samples*2,obj.FirstDataHeader.active_channels];
+%                dims = [obj.DataHeader.number_of_samples,obj.DataHeader.active_channels];
+%                DataFull = reshape(Data0(1:2:end) + 1j*Data0(2:2:end), dims);
+                dims = [obj.DataHeader.number_of_samples*2,obj.DataHeader.active_channels];
                 DataFull = reshape(Data0,dims);
+%                figure(999998); 
+%                plot(abs(DataFull(:,1)))
                 DataUsed = DataFull((obj.SampStart-1)*2+1:obj.SampEnd*2,:);
+%                figure(999999); 
+%                plot(abs(DataUsed(:,1)))
                 if obj.DataAcqNumber > obj.DummyAcqs
-                    obj.DataBlock(:,n,:) = DataUsed;
+                    obj.Data(:,n,:) = DataUsed;
                 end
                 if obj.DataAcqNumber == obj.TotalAcqs
                     obj.DataBlockAcqStopNumber = obj.TotalAcqs;
+                    %--
+                    %leftover = obj.AcqsPerPortRead - n;
+                    %obj.Data(:,n+1:end,:) = obj.Data(obj.NumCol,leftover,obj.RxChannels);           % do like this for now.
+                    %--
                     break
                 end
                 Ptr = Ptr + obj.DataLength;
@@ -272,15 +275,12 @@ classdef RwsPortControl < handle
                 if Id ~= constants.MRD_MESSAGE_ISMRMRD_ACQUISITION
                     error('Data Parsing Problem');
                 end
-                obj.DataBlockIds(n) = Id;
                 Ptr = Ptr + obj.IdentifierLength;
-                HeaderBytes = obj.PortData(Ptr:(Ptr+obj.HeaderLength-1));
-                Header = ismrmrd.AcquisitionHeader(typecast(HeaderBytes,'uint8'));
-                obj.DataBlockHeaders{n} = Header;
+%                 HeaderBytes = obj.PortData(Ptr:(Ptr+obj.HeaderLength-1));
+%                 Header = ismrmrd.AcquisitionHeader(typecast(HeaderBytes,'uint8'));
                 Ptr = Ptr + obj.HeaderLength; 
                 obj.DataAcqNumber = obj.DataAcqNumber + 1;
             end
-            warning('on');
         end
 
 %==================================================================
@@ -300,20 +300,6 @@ classdef RwsPortControl < handle
             
         end
 
-%==================================================================
-% GetDataBlockIds
-%==================================================================    
-        function DataBlockIds = GetDataBlockIds(obj,log)
-            DataBlockIds = obj.DataBlockIds;
-        end  
-        
-%==================================================================
-% GetDataBlockHeaders
-%==================================================================    
-        function DataBlockHeaders = GetDataBlockHeaders(obj,log)
-            DataBlockHeaders = obj.DataBlockHeaders;
-        end 
-        
 %==================================================================
 % PortFinish
 %==================================================================    

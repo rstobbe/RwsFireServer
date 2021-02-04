@@ -46,6 +46,7 @@ classdef RwsFireServer < RwsPortControl
                         log.info('ReceiveData: %d:%d Acqs / PortWait: %d ms',obj.TotalAcqs,obj.TotalAcqs,round(1000*obj.PortWait(n)));
                     end
                     Recon.IntraAcqProcess(obj,log);
+                    test = Recon.DataHeaders;
                 end
                 log.info('Approximate Data Receive Rate: %d Mbps / Time Per Acq: %d us',round((obj.PortDataSize/max(obj.PortWait))*8/1e6),round(max(1000000*obj.PortWait)/obj.AcqsPerPortRead));
                 
@@ -66,11 +67,11 @@ classdef RwsFireServer < RwsPortControl
         end
 
 %==================================================================
-% Delete
-%==================================================================         
-        function delete(obj)
-        end
+% ReturnHandler
+%================================================================== 
+        function Handler = ReturnHandler(obj)
+            Handler = 'RwsFireServer';
+        end             
         
     end
-    
 end
