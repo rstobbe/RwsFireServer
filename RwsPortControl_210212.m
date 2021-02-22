@@ -35,7 +35,7 @@ classdef RwsPortControl < handle
         ExpectedBytes;
         BufferReadNumber = 0;
         BaseSocket;
-        SocketBufferSize = 100e8;               % higher - for image??        
+        SocketBufferSize = 100e7;               % higher - for image??        
         SocketInputStream;
         SocketDataInputStream;
         SocketOutputStream;
@@ -65,33 +65,19 @@ classdef RwsPortControl < handle
 % Constructor
 %==================================================================  
         function obj = RwsPortControl(port,log)
-            obj.port = port;
-        end
-
-%==================================================================
-% PortSetup
-%==================================================================  
-        function obj = PortSetup(obj,log)
             import java.net.ServerSocket
             import java.io.*
+            obj.port = port;
             obj.BaseSocket = ServerSocket(obj.port);
             obj.BaseSocket.setSoTimeout(0);                   % infinite timeout.  
-            obj.BufferReadNumber = 0;
-            obj.PortWait = 0;
-            obj.MaxPortWait = 0;
-            obj.MaxPortWaitAcq = 0;
-            obj.PortReadTime = 0;
-            ojb.MaxPortReadTime = 0;
-        end        
+        end
         
 %==================================================================
 % ConnectClient
 %==================================================================          
         function ConnectClient(obj,log)
             Path = fileparts(mfilename('fullpath'));
-            warning('off');
             javaaddpath(Path);
-            warning('on');
             import java.net.ServerSocket
             import java.io.*
             OpenSocket = obj.BaseSocket.accept;
@@ -243,7 +229,7 @@ classdef RwsPortControl < handle
             while true
                 DataAtPort = obj.SocketInputStream.available;
                 if DataAtPort == obj.SocketBufferSize
-                    error('SocketBufferSize must be increased');
+                    log.error('SocketBufferSize must be increased');
                 end
                 if DataAtPort > obj.PortDataSize
                     break
@@ -315,31 +301,10 @@ classdef RwsPortControl < handle
         function TestScannerFinished(obj,log)
             Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
             if Id ~= constants.MRD_MESSAGE_CLOSE
-                error('Port Problem Somewhere');
+                error('fix ReadPortMetaData');
             end   
         end
-
-%==================================================================
-% ZeroData
-%==================================================================         
-        function ZeroData(obj,ZeroDataInds)
-            obj.DataBlock(:,ZeroDataInds,:) = 0;
-        end           
-
-%==================================================================
-% ExtractSequenceParams
-%==================================================================         
-        function Params = ExtractSequenceParams(obj,SeqParams)
-            for n = 1:length(SeqParams)
-                switch SeqParams{n}
-                    case 'TR'
-                        Params{n} = obj.MetaData.sequenceParameters.TR;
-                    case 'NumAverages'        
-                        Params{n} = obj.NumAverages;
-                end
-            end
-        end        
-        
+    
 %==================================================================
 % SendOneImage
 %==================================================================         

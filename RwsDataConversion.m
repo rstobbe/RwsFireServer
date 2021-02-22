@@ -3,7 +3,7 @@
 %  TCP/IP Port Control
 %================================================================
 
-classdef RwsPortControl < handle
+classdef RwsDataConversion < handle
     
     properties (SetAccess = private) 
         port;
@@ -35,7 +35,7 @@ classdef RwsPortControl < handle
         ExpectedBytes;
         BufferReadNumber = 0;
         BaseSocket;
-        SocketBufferSize = 100e8;               % higher - for image??        
+        SocketBufferSize = 100e7;               % higher - for image??        
         SocketInputStream;
         SocketDataInputStream;
         SocketOutputStream;
@@ -55,43 +55,27 @@ classdef RwsPortControl < handle
         DataBlockHeaders;
         DataBlock;
         CartInfo;
-%         DataRecord = 0;
-%         DataRecordDir;
-%         DataRecordFile;
+        DataRecordFileId;
     end
     methods
 
 %==================================================================
 % Constructor
 %==================================================================  
-        function obj = RwsPortControl(port,log)
-            obj.port = port;
-        end
-
-%==================================================================
-% PortSetup
-%==================================================================  
-        function obj = PortSetup(obj,log)
+        function obj = RwsDataConversion(port)
             import java.net.ServerSocket
             import java.io.*
+            obj.port = port;
             obj.BaseSocket = ServerSocket(obj.port);
             obj.BaseSocket.setSoTimeout(0);                   % infinite timeout.  
-            obj.BufferReadNumber = 0;
-            obj.PortWait = 0;
-            obj.MaxPortWait = 0;
-            obj.MaxPortWaitAcq = 0;
-            obj.PortReadTime = 0;
-            ojb.MaxPortReadTime = 0;
-        end        
+        end
         
 %==================================================================
 % ConnectClient
 %==================================================================          
-        function ConnectClient(obj,log)
+        function ConnectClient(obj)
             Path = fileparts(mfilename('fullpath'));
-            warning('off');
             javaaddpath(Path);
-            warning('on');
             import java.net.ServerSocket
             import java.io.*
             OpenSocket = obj.BaseSocket.accept;
@@ -106,35 +90,44 @@ classdef RwsPortControl < handle
 %==================================================================
 % InitiateDataRecord
 %==================================================================       
-        function InitiateDataRecord(obj,log,Dir)
-            % maybe add one day
+        function InitiateDataRecord(obj,DataFile)
+            obj.DataRecordFileId = fopen(DataFile);
         end
             
 %==================================================================
 % ReadPortMetaData
 %==================================================================   
-        function ReadPortMetaData(obj,log)
+        function ReadPortMetaData(obj)
             
+            Data = [];
             %--------------------------------------------
             % Get Recon
             %--------------------------------------------
-            Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
+            IdBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER);
+            Id = typecast(IdBytes,'uint16');
             if Id ~= constants.MRD_MESSAGE_CONFIG_FILE
                 error('fix ReadPortMetaData');
             end
+            Data = [Data;IdBytes];
             ReconHandlerNameBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_CONFIGURATION_FILE);
             obj.ReconHandlerName = strtok(char(ReconHandlerNameBytes)',char(0));
-
+            Data = [Data;ReconHandlerNameBytes];
+            
             %--------------------------------------------
             % Get MetaData
             %--------------------------------------------
-            Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
+            IdBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER);
+            Id = typecast(IdBytes,'uint16');
             if Id ~= constants.MRD_MESSAGE_METADATA_XML_TEXT
                 error('fix ReadPortMetaData');
-            end            
-            length = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_LENGTH),'uint32');
-            MetaDataBytes = obj.SocketDataInputStream.readBuffer(length);
+            end   
+            Data = [Data;IdBytes];
+            LengthBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_LENGTH);
+            Length = typecast(LengthBytes,'uint32');
+            Data = [Data;LengthBytes];
+            MetaDataBytes = obj.SocketDataInputStream.readBuffer(Length);
             MetaData0 = strtok(char(MetaDataBytes)',char(0));
+            Data = [Data;MetaDataBytes];            
             
             %--------------------------------------------
             % Siemens_to_ISMRMRD Fix 
@@ -146,18 +139,23 @@ classdef RwsPortControl < handle
             else
                 MetaData1 = MetaData0;
             end
-            obj.MetaData = ismrmrd.xml.deserialize(MetaData1);   
+            obj.MetaData = ismrmrd.xml.deserialize(MetaData1); 
+            measurementID = obj.MetaData.measurementInformation.measurementID
             
             %--------------------------------------------
             % Get FirstDataHeader
             %--------------------------------------------
-            Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
+            IdBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER);
+            Id = typecast(IdBytes,'uint16');
             if Id ~= constants.MRD_MESSAGE_ISMRMRD_ACQUISITION
                 error('fix ReadPortMetaData');
             end
-            HeaderBytes0 = int8(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_ACQUISITION_HEADER));
-            HeaderBytes = typecast(HeaderBytes0,'uint8');
+            Data = [Data;IdBytes];
+            
+            DataHeaderBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_ACQUISITION_HEADER);
+            HeaderBytes = typecast(DataHeaderBytes,'uint8');
             obj.FirstDataHeader = ismrmrd.AcquisitionHeader(HeaderBytes);
+            Data = [Data;HeaderBytes];
            
             %--------------------------------------------
             % Initialize PortData Info
@@ -183,6 +181,12 @@ classdef RwsPortControl < handle
             obj.CartInfo.NumSlices = obj.MetaData.encoding.encodingLimits.slice.maximum + 1;
             obj.CartInfo.NumPe1Steps = obj.MetaData.encoding.encodingLimits.kspace_encoding_step_1.maximum + 1;
             obj.CartInfo.NumPe2Steps = obj.MetaData.encoding.encodingLimits.kspace_encoding_step_2.maximum + 1;  
+          
+            %--------------------------------------------
+            % Write Data
+            %--------------------------------------------               
+            %%% - finish
+            
         end
         
 %==================================================================
@@ -243,7 +247,7 @@ classdef RwsPortControl < handle
             while true
                 DataAtPort = obj.SocketInputStream.available;
                 if DataAtPort == obj.SocketBufferSize
-                    error('SocketBufferSize must be increased');
+                    log.error('SocketBufferSize must be increased');
                 end
                 if DataAtPort > obj.PortDataSize
                     break
@@ -309,37 +313,6 @@ classdef RwsPortControl < handle
             warning('on');
         end
 
-%==================================================================
-% TestScannerFinished
-%==================================================================          
-        function TestScannerFinished(obj,log)
-            Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
-            if Id ~= constants.MRD_MESSAGE_CLOSE
-                error('Port Problem Somewhere');
-            end   
-        end
-
-%==================================================================
-% ZeroData
-%==================================================================         
-        function ZeroData(obj,ZeroDataInds)
-            obj.DataBlock(:,ZeroDataInds,:) = 0;
-        end           
-
-%==================================================================
-% ExtractSequenceParams
-%==================================================================         
-        function Params = ExtractSequenceParams(obj,SeqParams)
-            for n = 1:length(SeqParams)
-                switch SeqParams{n}
-                    case 'TR'
-                        Params{n} = obj.MetaData.sequenceParameters.TR;
-                    case 'NumAverages'        
-                        Params{n} = obj.NumAverages;
-                end
-            end
-        end        
-        
 %==================================================================
 % SendOneImage
 %==================================================================         

@@ -7,7 +7,7 @@ classdef RwsPortControl < handle
     
     properties (SetAccess = private) 
         port;
-        ReconHandlerName;
+        ReconType;
         MetaData;
         FirstDataHeader;
         IdentifierLength;
@@ -16,8 +16,8 @@ classdef RwsPortControl < handle
         DataLength;
         TotalLength;
         AcqsPerPortRead;
-        AcqsPerImage;
         TotalAcqs;
+        DummyAcqs;
         SampStart;
         SampEnd;
         NumCol;
@@ -31,11 +31,10 @@ classdef RwsPortControl < handle
         TrajDims;
         TotalPortReads;
         TotalBlockReads;
-        BlocksPerImage;
         ExpectedBytes;
         BufferReadNumber = 0;
         BaseSocket;
-        SocketBufferSize = 100e8;               % higher - for image??        
+        SocketBufferSize = 100e7;               % higher - for image??        
         SocketInputStream;
         SocketDataInputStream;
         SocketOutputStream;
@@ -55,9 +54,6 @@ classdef RwsPortControl < handle
         DataBlockHeaders;
         DataBlock;
         CartInfo;
-%         DataRecord = 0;
-%         DataRecordDir;
-%         DataRecordFile;
     end
     methods
 
@@ -65,33 +61,19 @@ classdef RwsPortControl < handle
 % Constructor
 %==================================================================  
         function obj = RwsPortControl(port,log)
-            obj.port = port;
-        end
-
-%==================================================================
-% PortSetup
-%==================================================================  
-        function obj = PortSetup(obj,log)
             import java.net.ServerSocket
             import java.io.*
+            obj.port = port;
             obj.BaseSocket = ServerSocket(obj.port);
             obj.BaseSocket.setSoTimeout(0);                   % infinite timeout.  
-            obj.BufferReadNumber = 0;
-            obj.PortWait = 0;
-            obj.MaxPortWait = 0;
-            obj.MaxPortWaitAcq = 0;
-            obj.PortReadTime = 0;
-            ojb.MaxPortReadTime = 0;
-        end        
+        end
         
 %==================================================================
 % ConnectClient
 %==================================================================          
         function ConnectClient(obj,log)
             Path = fileparts(mfilename('fullpath'));
-            warning('off');
             javaaddpath(Path);
-            warning('on');
             import java.net.ServerSocket
             import java.io.*
             OpenSocket = obj.BaseSocket.accept;
@@ -102,14 +84,7 @@ classdef RwsPortControl < handle
             dInputStream = DataInputStream(obj.SocketInputStream);
             obj.SocketDataInputStream = DataReader(dInputStream);
         end
-
-%==================================================================
-% InitiateDataRecord
-%==================================================================       
-        function InitiateDataRecord(obj,log,Dir)
-            % maybe add one day
-        end
-            
+        
 %==================================================================
 % ReadPortMetaData
 %==================================================================   
@@ -122,8 +97,8 @@ classdef RwsPortControl < handle
             if Id ~= constants.MRD_MESSAGE_CONFIG_FILE
                 error('fix ReadPortMetaData');
             end
-            ReconHandlerNameBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_CONFIGURATION_FILE);
-            obj.ReconHandlerName = strtok(char(ReconHandlerNameBytes)',char(0));
+            ReconTypeBytes = obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_CONFIGURATION_FILE);
+            obj.ReconType = strtok(char(ReconTypeBytes)',char(0));
 
             %--------------------------------------------
             % Get MetaData
@@ -189,22 +164,18 @@ classdef RwsPortControl < handle
 % InitStitchPortControl
 %==================================================================   
         function InitStitchPortControl(obj,PortUpdate,log)
-            obj.AcqsPerPortRead = PortUpdate.AcqsPerPortRead;                       
-            obj.AcqsPerImage = obj.CartInfo.NumPe1Steps;            % should include Dummy Acqs.
-            if isfield(PortUpdate,'TotalAcqs')
-                obj.TotalAcqs = PortUpdate.TotalAcqs;
-            else
-                obj.TotalAcqs = obj.NumAverages * obj.NumContrasts * obj.NumRepititions * obj.NumSets * obj.AcqsPerImage;
-            end    
+            obj.AcqsPerPortRead = PortUpdate.AcqsPerPortRead;           
+            obj.TotalAcqs = PortUpdate.TotalAcqs;
+            obj.DummyAcqs = PortUpdate.DummyAcqs;
             obj.SampStart = PortUpdate.SampStart;
             obj.SampEnd = PortUpdate.SampEnd;
-            obj.NumCol = PortUpdate.NumCol;            
+            obj.NumCol = PortUpdate.NumCol;
+            
             obj.PortDataSize = obj.AcqsPerPortRead * obj.TotalLength;
             obj.PortData = zeros(obj.PortDataSize,1);   
             obj.ExpectedBytes = obj.TotalAcqs*obj.TotalLength - (obj.IdentifierLength+obj.HeaderLength);
             obj.TotalPortReads = ceil(obj.TotalAcqs/obj.AcqsPerPortRead);
             obj.TotalBlockReads = obj.TotalPortReads;
-            obj.BlocksPerImage = ceil(obj.AcqsPerImage/obj.AcqsPerPortRead);
             obj.DataBlockNumber = 0;
             obj.DataAcqNumber = 1;
             obj.DataBlockLength = obj.AcqsPerPortRead; 
@@ -221,6 +192,7 @@ classdef RwsPortControl < handle
             else
                 obj.TotalAcqs = obj.NumAverages * obj.NumContrasts * obj.NumPhases * obj.NumRepititions * obj.NumSets * obj.NumSegments * obj.CartInfo.NumPe1Steps * obj.CartInfo.NumPe2Steps * obj.CartInfo.NumSlices;
             end
+            obj.DummyAcqs = 0; 
             obj.SampStart = obj.FirstDataHeader.discard_pre+1;
             obj.SampEnd = obj.SampStart-1 + obj.NumCol - obj.FirstDataHeader.discard_pre;
             obj.PortDataSize = obj.AcqsPerPortRead * obj.TotalLength;
@@ -243,7 +215,7 @@ classdef RwsPortControl < handle
             while true
                 DataAtPort = obj.SocketInputStream.available;
                 if DataAtPort == obj.SocketBufferSize
-                    error('SocketBufferSize must be increased');
+                    log.error('SocketBufferSize must be increased');
                 end
                 if DataAtPort > obj.PortDataSize
                     break
@@ -282,7 +254,9 @@ classdef RwsPortControl < handle
                 dims = [obj.FirstDataHeader.number_of_samples*2,obj.FirstDataHeader.active_channels];
                 DataFull = reshape(Data0,dims);
                 DataUsed = DataFull((obj.SampStart-1)*2+1:obj.SampEnd*2,:);
-                obj.DataBlock(:,n,:) = DataUsed;
+                if obj.DataAcqNumber > obj.DummyAcqs
+                    obj.DataBlock(:,n,:) = DataUsed;
+                end
                 if obj.DataAcqNumber == obj.TotalAcqs
                     obj.DataBlockAcqStopNumber = obj.TotalAcqs;
                     break
@@ -309,37 +283,6 @@ classdef RwsPortControl < handle
             warning('on');
         end
 
-%==================================================================
-% TestScannerFinished
-%==================================================================          
-        function TestScannerFinished(obj,log)
-            Id = typecast(obj.SocketDataInputStream.readBuffer(constants.SIZEOF_MRD_MESSAGE_IDENTIFIER),'uint16');
-            if Id ~= constants.MRD_MESSAGE_CLOSE
-                error('Port Problem Somewhere');
-            end   
-        end
-
-%==================================================================
-% ZeroData
-%==================================================================         
-        function ZeroData(obj,ZeroDataInds)
-            obj.DataBlock(:,ZeroDataInds,:) = 0;
-        end           
-
-%==================================================================
-% ExtractSequenceParams
-%==================================================================         
-        function Params = ExtractSequenceParams(obj,SeqParams)
-            for n = 1:length(SeqParams)
-                switch SeqParams{n}
-                    case 'TR'
-                        Params{n} = obj.MetaData.sequenceParameters.TR;
-                    case 'NumAverages'        
-                        Params{n} = obj.NumAverages;
-                end
-            end
-        end        
-        
 %==================================================================
 % SendOneImage
 %==================================================================         

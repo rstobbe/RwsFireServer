@@ -15,20 +15,17 @@ classdef RwsFireServer < RwsPortControl
         function obj = RwsFireServer(port,log)
             obj@RwsPortControl(port,log);             
         end
-             
+        
+%==================================================================
+% Connect Client (in RwsPortControl)
+%==================================================================         
+        
 %==================================================================
 % Serve Client
 %================================================================== 
         function ServeClient(obj,log) 
             while true
                 try 
-                    %--------------------------------------------
-                    % Connect Client
-                    %--------------------------------------------
-                    log.info('Wait for Next Scan from Scanner');
-                    obj.PortSetup(log);
-                    obj.ConnectClient(log);
-                    
                     %--------------------------------------------
                     % Get MetaData
                     %--------------------------------------------
@@ -63,9 +60,8 @@ classdef RwsFireServer < RwsPortControl
                     Image = Recon.ReturnIsmrmImage(log);
                     log.info("Send Image to Scanner")
                     obj.SendOneImage(Image,log);
-                    obj.PortFinish(log);
+                    obj.SendClose(log);
                     if obj.ReturnToCompass
-                        log.info("Send Image to Compass")
                         Recon.CompassReturnFire(obj,Recon,log);
                     end
                     if obj.CompassSave

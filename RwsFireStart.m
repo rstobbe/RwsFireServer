@@ -18,13 +18,9 @@ function RwsFireStart(varargin)
 
     log = logging.createLog(logfile);
     
-    log.info('Initialize server on port %d', port);
+    log.info('Initialize Server on Port %d', port);
     Server = RwsFireServer(port,log);
     
-    log.info('Wait for client');
-    Server.ConnectClient(log);
-
-    log.info('Serve client');
-    Server.ServeClient(log);    
-    
+    Server.SetCompassSave('E:\_TempFireImages\');
+    Server.ServeClient(log);       
 end
